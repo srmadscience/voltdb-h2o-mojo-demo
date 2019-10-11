@@ -1,5 +1,7 @@
 package org.voltdb.h20mojo.client;
 
+
+
 /* This file is part of VoltDB.
  * Copyright (C) 2008-2019 VoltDB Inc.
  *
@@ -24,10 +26,8 @@ package org.voltdb.h20mojo.client;
  */
 
 import java.io.IOException;
-
 import java.util.Arrays;
 import java.util.Random;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.voltdb.client.Client;
@@ -61,10 +61,14 @@ public class VoltDBH2OMojoClient {
   };
 
   /**
-   * zip files containing resources we want to use. Note that they are located in
-   * the same directory our stored procs are...
+   * zip files containing resources we want to use. Note that they are located
+   * in the same directory our stored procs are...
    */
-  final String[] zipFiles = { "gbm_pojo_test.zip" };
+  final String[] zipFiles = { "gbm_pojo_test.zip"
+      // ,"StackedEnsemble_BestOfFamily_AutoML_20191007_160201.zip"
+      // ,"deeplearning_5004dbaa_17ab_4a57_99c0_a62273b7f1be.zip"
+      // ,"Automotive-ResearchDataSet-VIF-AEGIS.zip"
+  };
 
   /**
    * Procedure statements for the VoltDB implementation of TATP. Note that you
@@ -77,6 +81,10 @@ public class VoltDBH2OMojoClient {
 
       "create procedure check_cache as select * from cache_effectiveness;"
 
+  };
+  
+  final String[] otherClasses = {
+      "ie.voltdb.h2outil.H2OMojoWrangler"
   };
 
   // We only create the DDL and procedures if a call to testProcName with
@@ -208,9 +216,10 @@ public class VoltDBH2OMojoClient {
   public void createSchemaIfNeeded() throws Exception {
 
     VoltDBSchemaBuilder b = new VoltDBSchemaBuilder(ddlStatements, procStatements, zipFiles, "mojoProcs.jar", client,
-        "mojoprocs");
+        "mojoprocs", testProcName, testParams,otherClasses);
 
-    b.loadClassesAndDDLIfNeeded(testProcName, testParams);
+    b.setMaxZipFileSize(50000);
+    b.loadClassesAndDDLIfNeeded();
 
   }
 
@@ -556,4 +565,5 @@ public class VoltDBH2OMojoClient {
     logger.info(message);
   }
 
+ 
 }

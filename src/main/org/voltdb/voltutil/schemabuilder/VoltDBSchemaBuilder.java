@@ -23,6 +23,7 @@
 package org.voltdb.voltutil.schemabuilder;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarOutputStream;
@@ -50,7 +52,7 @@ public final class VoltDBSchemaBuilder {
   private static final String PROCEDURE = "Procedure ";
   private static final String WAS_NOT_FOUND = " was not found";
 
-  private  String jarFileName;
+  private String jarFileName;
 
   private Logger logger = LoggerFactory.getLogger(VoltDBSchemaBuilder.class);
 
@@ -61,10 +63,19 @@ public final class VoltDBSchemaBuilder {
   private String[] procStatements;
 
   private String[] jarFiles;
-  
+
   private String[] zipFiles;
+
+  private String[] otherClasses;
   
   String procPackageName;
+
+  String testProcName;
+
+  Object[] testParams;
+
+  // How big zip files have to be before we split and send by themselves.
+  int maxZipFileSize = 10 * 1024 * 1024;
 
   /**
    * Utility class to build the schema.
@@ -72,7 +83,8 @@ public final class VoltDBSchemaBuilder {
    * @author srmadscience / VoltDB
    *
    */
-  public VoltDBSchemaBuilder(String[] ddlStatements, String[] procStatements, String[] zipFiles, String jarFileName, Client voltClient, String procPackageName) {
+  public VoltDBSchemaBuilder(String[] ddlStatements, String[] procStatements, String[] zipFiles, String jarFileName,
+      Client voltClient, String procPackageName, String testProcName, Object[] testParams, String[] otherClasses ) {
     super();
     this.ddlStatements = ddlStatements;
     this.procStatements = procStatements;
@@ -80,41 +92,11 @@ public final class VoltDBSchemaBuilder {
     this.procPackageName = procPackageName;
     this.zipFiles = zipFiles;
     this.jarFileName = jarFileName;
+    this.testProcName = testProcName;
+    this.testParams = testParams;
+    this.otherClasses = otherClasses;
     
     jarFiles = makeJarFiles(procStatements);
-  }
-
-  /**
-   * Method to take an array of "CREATE PROCEDURE" statements and 
-   * return a list of the class files they are talking about.
-   * @param procStatements
-   * @return a list of the class files they are talking about.
-   */
-  private String[] makeJarFiles(String[] procStatements) {
-
-    ArrayList<String> jarFileAL = new ArrayList<String>();
-
-    for (int i = 0; i < procStatements.length; i++) {
-
-       String thisProcStringNoNewLines = procStatements[i].toUpperCase().replace(System.lineSeparator(), " ");
-
-      if (thisProcStringNoNewLines.indexOf(" FROM CLASS ") > -1) {
-        String[] thisProcStringAsWords = procStatements[i].replace(".", " ").split(" ");
-
-        if (thisProcStringAsWords[thisProcStringAsWords.length - 1].endsWith(";")) {
-          jarFileAL.add(thisProcStringAsWords[thisProcStringAsWords.length - 1].replace(";", ""));
-
-        } else {
-          logger.error("Parsing of '" + procStatements[i] + "' went wrong; can't find proc name");
-        }
-
-      }
-    }
-
-    String[] jarFileList = new String[jarFileAL.size()];
-    jarFileList = jarFileAL.toArray(jarFileList);
-
-    return jarFileList;
   }
 
   /**
@@ -123,7 +105,7 @@ public final class VoltDBSchemaBuilder {
    * @return true if the 'Get' procedure exists and takes one string as a
    *         parameter.
    */
-  public boolean schemaExists(String testProcName, Object[] testParams) {
+  public boolean schemaExists() {
 
     boolean schemaExists = false;
 
@@ -161,9 +143,9 @@ public final class VoltDBSchemaBuilder {
    * 
    * @throws Exception
    */
-  public synchronized boolean loadClassesAndDDLIfNeeded(String testProcName, Object[] testParams) throws Exception {
+  public synchronized boolean loadClassesAndDDLIfNeeded() throws Exception {
 
-    if (schemaExists(testProcName, testParams)) {
+    if (schemaExists()) {
       return true;
     }
 
@@ -174,6 +156,55 @@ public final class VoltDBSchemaBuilder {
           "Temp Directory (from Files.createTempDirectory()) '" + tempDir.getAbsolutePath() + "' is not writable");
     }
 
+    //
+    // Step 1: Send big zip files ahead.
+    //
+    if (zipFiles != null) {
+      for (int i = 0; i < zipFiles.length; i++) {
+
+        if (isBigZipFile(zipFiles[i])) {
+
+          ArrayList<byte[]> zipParts = split(zipFiles[i]);
+
+          for (int j = 0; j < zipParts.size(); j++) {
+
+            String zipfilename = zipFiles[i] + "." + j;
+            String zipJARfilename = zipfilename + ".jar";
+            ByteArrayInputStream is = new ByteArrayInputStream(zipParts.get(j));
+
+            logger.info("Creating JAR file for ZIP part " + j + " in " + tempDir + File.separator + zipJARfilename);
+
+            Manifest manifest = new Manifest();
+            manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+            JarOutputStream newJarFileOutputStream = new JarOutputStream(
+                new FileOutputStream(tempDir + File.separator + zipJARfilename), manifest);
+
+            add(procPackageName.replace(".", "/") + "/" + zipfilename, is, newJarFileOutputStream);
+
+            newJarFileOutputStream.close();
+            File file = new File(tempDir + File.separator + zipJARfilename);
+
+            byte[] jarFileContents = new byte[(int) file.length()];
+            FileInputStream fis = new FileInputStream(file);
+            fis.read(jarFileContents);
+            fis.close();
+            logger.info("Calling @UpdateClasses to load JAR file containing zip file " + zipFiles[i] + " part " + j);
+
+            ClientResponse cr;
+            cr = voltClient.callProcedure("@UpdateClasses", jarFileContents, null);
+            if (cr.getStatus() != ClientResponse.SUCCESS) {
+              throw new Exception("Attempt to execute UpdateClasses failed:" + cr.getStatusString());
+            }
+
+          }
+
+        }
+      }
+    }
+    
+    //
+    // Step 2: Create tables etc
+    //
     ClientResponse cr;
 
     for (int i = 0; i < ddlStatements.length; i++) {
@@ -194,30 +225,47 @@ public final class VoltDBSchemaBuilder {
       }
     }
 
+    //
+    // Step 3: Load other zip files and classes into a JAR file and send.
+    //
     logger.info("Creating JAR file in " + tempDir + File.separator + jarFileName);
     Manifest manifest = new Manifest();
     manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
-    JarOutputStream newJarFile = new JarOutputStream(new FileOutputStream(tempDir + File.separator + jarFileName),
-        manifest);
-
-    for (int i = 0; i < jarFiles.length; i++) {
-      InputStream is = getClass().getResourceAsStream("/" + procPackageName.replace(".", "/") + "/" + jarFiles[i] + ".class");
-      logger.info("processing " + procPackageName.replace(".", "/") + "/" + jarFiles[i]);
-      add(procPackageName.replace(".", "/") + "/" + jarFiles[i]+ ".class", is, newJarFile);
-    }
+    JarOutputStream newJarFileOutputStream = new JarOutputStream(
+        new FileOutputStream(tempDir + File.separator + jarFileName), manifest);
 
     
+    
+    for (int i = 0; i < otherClasses.length; i++) {
+      InputStream is = getClass()
+          .getResourceAsStream("/" + otherClasses[i].replace(".", "/") + ".class");
+      logger.info("processing " + otherClasses[i].replace(".", "/"));
+      add(otherClasses[i].replace(".", "/") + ".class", is, newJarFileOutputStream);
+    }
+    
+    
+   
+    
+    for (int i = 0; i < jarFiles.length; i++) {
+      InputStream is = getClass()
+          .getResourceAsStream("/" + procPackageName.replace(".", "/") + "/" + jarFiles[i] + ".class");
+      logger.info("processing " + procPackageName.replace(".", "/") + "/" + jarFiles[i]);
+      add(procPackageName.replace(".", "/") + "/" + jarFiles[i] + ".class", is, newJarFileOutputStream);
+    }
+    
+    
+
     if (zipFiles != null) {
-      for (int i=0; i < zipFiles.length; i++) {
-        InputStream is = getClass().getResourceAsStream("/"+procPackageName.replace(".", "/")+"/" + zipFiles[i]);
-        logger.info("processing " + procPackageName.replace(".", "/") + "/" + zipFiles[i]);
-        add(procPackageName.replace(".", "/") + "/" + zipFiles[i], is, newJarFile);
+      for (int i = 0; i < zipFiles.length; i++) {
+        if (!isBigZipFile(zipFiles[i])) {
+          InputStream is = getClass().getResourceAsStream("/" + procPackageName.replace(".", "/") + "/" + zipFiles[i]);
+          logger.info("processing " + procPackageName.replace(".", "/") + "/" + zipFiles[i]);
+          add(procPackageName.replace(".", "/") + "/" + zipFiles[i], is, newJarFileOutputStream);
+        }
       }
     }
-    
 
-    
-    newJarFile.close();
+    newJarFileOutputStream.close();
     File file = new File(tempDir + File.separator + jarFileName);
 
     byte[] jarFileContents = new byte[(int) file.length()];
@@ -238,9 +286,96 @@ public final class VoltDBSchemaBuilder {
         throw new Exception("Attempt to execute '" + procStatements[i] + "' failed:" + cr.getStatusString());
       }
     }
-    
-    return schemaExists(testProcName, testParams);
 
+    return schemaExists();
+
+  }
+
+  private ArrayList<byte[]> split(String zipfilename) throws Exception {
+
+    ArrayList<byte[]> fileParts = new ArrayList<byte[]>();
+
+    BufferedInputStream is = new BufferedInputStream(
+        getClass().getResourceAsStream("/" + procPackageName.replace(".", "/") + "/" + zipfilename), maxZipFileSize);
+
+    byte[] b = new byte[maxZipFileSize];
+
+    int bytesRead = is.read(b);
+
+    while (bytesRead > -1) {
+
+      if (bytesRead < maxZipFileSize) {
+        b = Arrays.copyOfRange(b, 0, bytesRead);
+      }
+
+      fileParts.add(b);
+      b = new byte[maxZipFileSize];
+      bytesRead = is.read(b);
+
+    }
+
+    is.close();
+
+    return fileParts;
+  }
+
+  private boolean isBigZipFile(String zipfilename) throws Exception {
+
+    boolean isBig = false;
+
+    BufferedInputStream is = new BufferedInputStream(
+        getClass().getResourceAsStream("/" + procPackageName.replace(".", "/") + "/" + zipfilename));
+
+    byte[] b = new byte[maxZipFileSize];
+
+    try {
+      final int howManyRead = is.read(b, 0, maxZipFileSize);
+
+      if (howManyRead >= maxZipFileSize) {
+        isBig = true;
+      }
+    } catch (IOException e) {
+      throw new Exception("Resource " + zipfilename + " not found in " + procPackageName );
+    }
+
+    is.close();
+
+    return isBig;
+
+  }
+
+  /**
+   * Method to take an array of "CREATE PROCEDURE" statements and return a list
+   * of the class files they are talking about.
+   * 
+   * @param procStatements
+   * @return a list of the class files they are talking about.
+   */
+  private String[] makeJarFiles(String[] procStatements) {
+
+    ArrayList<String> jarFileAL = new ArrayList<String>();
+
+    for (int i = 0; i < procStatements.length; i++) {
+
+      String thisProcStringNoNewLines = procStatements[i].toUpperCase().replace(System.lineSeparator(), " ");
+
+      if (thisProcStringNoNewLines.indexOf(" FROM CLASS ") > -1) {
+        String[] thisProcStringAsWords = procStatements[i].replace(".", " ").split(" ");
+
+        if (thisProcStringAsWords[thisProcStringAsWords.length - 1].endsWith(";")) {
+          jarFileAL.add(thisProcStringAsWords[thisProcStringAsWords.length - 1].replace(";", ""));
+
+        } else {
+          logger.error("Parsing of '" + procStatements[i] + "' went wrong; can't find proc name");
+        }
+
+      }
+    }
+
+    String[] jarFileList = new String[jarFileAL.size()];
+    jarFileList = jarFileAL.toArray(jarFileList);
+
+    return jarFileList;
   }
 
   /**
@@ -276,6 +411,21 @@ public final class VoltDBSchemaBuilder {
       }
 
     }
+  }
+
+  /**
+   * @return the maxZipFileSize
+   */
+  public int getMaxZipFileSize() {
+    return maxZipFileSize;
+  }
+
+  /**
+   * @param maxZipFileSize
+   *          the maxZipFileSize to set
+   */
+  public void setMaxZipFileSize(int maxZipFileSize) {
+    this.maxZipFileSize = maxZipFileSize;
   }
 
 }

@@ -1,5 +1,7 @@
 package mojoprocs;
 
+
+
 /* This file is part of VoltDB.
  * Copyright (C) 2008-2019 VoltDB Inc.
  *
@@ -23,8 +25,6 @@ package mojoprocs;
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-import java.net.URL;
-
 import org.voltdb.SQLStmt;
 import org.voltdb.VoltProcedure;
 import org.voltdb.VoltTable;
@@ -34,9 +34,9 @@ import hex.genmodel.easy.RowData;
 import hex.genmodel.ModelMojoReader;
 import hex.genmodel.MojoModel;
 import hex.genmodel.MojoReaderBackend;
-import hex.genmodel.MojoReaderBackendFactory;
 import hex.genmodel.easy.EasyPredictModelWrapper;
 import hex.genmodel.easy.prediction.*;
+import ie.voltdb.h2outil.H2OMojoWrangler;
 
 /**
  * VoltDB procedure to invoke a generated h20.ai class that uses a MOJO.
@@ -57,18 +57,16 @@ public class IsFlightLate extends VoltProcedure {
       + "AND dest = ? AND CRSDepTime = ? AND year = ? AND month = ? AND dayOfMonth = ? "
       + "AND dayOfWeek = ? AND uniqueCarrier= ?;");
 
-  public static final SQLStmt trackCacheUsage = new SQLStmt("UPDATE CACHED_RESULTS set last_used = NOW, "
-      + "usage_count = usage_count + 1 WHERE origin = ? "
-      + "AND dest = ? AND CRSDepTime = ? AND year = ? AND month = ? AND dayOfMonth = ? "
-      + "AND dayOfWeek = ? AND uniqueCarrier= ?;");
+  public static final SQLStmt trackCacheUsage = new SQLStmt(
+      "UPDATE CACHED_RESULTS set last_used = NOW, " + "usage_count = usage_count + 1 WHERE origin = ? "
+          + "AND dest = ? AND CRSDepTime = ? AND year = ? AND month = ? AND dayOfMonth = ? "
+          + "AND dayOfWeek = ? AND uniqueCarrier= ?;");
 
-  public static final SQLStmt addCacheEntry = new SQLStmt("INSERT INTO CACHED_RESULTS "
-      + "(origin, dest,cRSDepTime,  year,  month,  dayOfMonth," + 
-      "       dayOfWeek,  uniqueCarrier,  last_used,usage_count, delayed) "
-      + " VALUES "
-      + " (?,?,?,?,?,?,?,?,NOW,1,?);");
+  public static final SQLStmt addCacheEntry = new SQLStmt(
+      "INSERT INTO CACHED_RESULTS " + "(origin, dest,cRSDepTime,  year,  month,  dayOfMonth,"
+          + "       dayOfWeek,  uniqueCarrier,  last_used,usage_count, delayed) " + " VALUES "
+          + " (?,?,?,?,?,?,?,?,NOW,1,?);");
 
-  
   /**
    * This VoltDB procedure uses an H20.AI function to guess whether a given
    * flight will be late. To make the example as simple as possible all values
@@ -109,38 +107,40 @@ public class IsFlightLate extends VoltProcedure {
       String dayOfWeek, String uniqueCarrier, String dest, int doStats) throws VoltAbortException {
 
     long startNs = System.nanoTime();
-    
+
     // We need to return an array of VoltTable[]. Normally we get
     // VoltTable's by issuing SQL queries. In this case we'll be inventing
     // one based on the results of h20.
     VoltTable[] h2oOut = null;
-    
+
     // We keep track of various durations in nanoseconds.
     long cacheCheckNs = -1;
     long durationCreateModeNs = -1;
     long durationModelExecNs = -1;
-    
+
     String result = null;
 
     // First thing: See if we have answered this question before...
     voltQueueSQL(seeIfCached, origin, dest, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier);
-    VoltTable[] cacheResults = voltExecuteSQL();  
+    VoltTable[] cacheResults = voltExecuteSQL();
     cacheCheckNs = System.nanoTime() - startNs;
 
     if (cacheResults[0].advanceRow()) {
-      
+
       // We know the answer, so send that back...
-      result= cacheResults[0].getString("DELAYED");
+      result = cacheResults[0].getString("DELAYED");
       h2oOut = createH2Oout(result);
-      
+
       // Update cache so we know it's useful.
       voltQueueSQL(trackCacheUsage, origin, dest, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier);
 
     } else {
 
-      // use h2o to do a prediction and then cache the result before returning it.
-      
-      // H2o uses a very large Java object. We can't afford to instantiate it each call...
+      // use h2o to do a prediction and then cache the result before returning
+      // it.
+
+      // H2o uses a very large Java object. We can't afford to instantiate it
+      // each call...
       try {
 
         // keep track of how long it takes to instantiate the modelWrapper.
@@ -155,11 +155,15 @@ public class IsFlightLate extends VoltProcedure {
           synchronized (this) {
             if (modelWrapper == null) {
 
-              // Note that the zip file needs to be in the same directory in the JAR 
+              // Note that the zip file needs to be in the same directory in the
+              // JAR
               // file as the procedures we are creating...
-              URL mojoURL = IsFlightLate.class.getResource(modelZipFileName);
-              MojoReaderBackend reader = MojoReaderBackendFactory.createReaderBackend(mojoURL,
-                  MojoReaderBackendFactory.CachingStrategy.MEMORY);
+
+              // URL mojoURL = IsFlightLate.class.getResource(modelZipFileName);
+              MojoReaderBackend reader = H2OMojoWrangler.createInMemoryReaderBackendFromSetOfZipFiles(modelZipFileName);
+
+              // = MojoReaderBackendFactory.createReaderBackend(mojoURL,
+              // MojoReaderBackendFactory.CachingStrategy.MEMORY);
               MojoModel model = ModelMojoReader.readFrom(reader);
               modelWrapper = new EasyPredictModelWrapper(model);
             }
@@ -186,12 +190,12 @@ public class IsFlightLate extends VoltProcedure {
         durationModelExecNs = System.nanoTime() - startNs;
 
         // Cache for future use...
-        voltQueueSQL(addCacheEntry, origin, dest, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier,p.label);
+        voltQueueSQL(addCacheEntry, origin, dest, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier,
+            p.label);
 
         // We now need to load the results into a VoltTable.
         result = p.label;
         h2oOut = createH2Oout(result);
-
 
       } catch (Exception e) {
 
@@ -204,54 +208,77 @@ public class IsFlightLate extends VoltProcedure {
 
       }
     }
-    
 
-    
     // Execute any SQL statements we have queued as a last step. In this
     // case it's a null-op.
     startNs = System.nanoTime();
     voltExecuteSQL(true);
     long updateDBNs = System.nanoTime() - startNs;
 
-    // Note that we dump stats to System.out. We do *not* send them back as 
+    // Note that we dump stats to System.out. We do *not* send them back as
     // part of a result. In VoltDB we implement High Availability by running the
-    // same procedure in two or more places at once, so we can't have any copy of 
-    // a procedure return different answers. It's very unlikely nanosecond timings
-    // will be the same in two places, even with the same inputs. The VoltDB client
-    // will get very upset if two copies of a procedure return different answers,
+    // same procedure in two or more places at once, so we can't have any copy
+    // of
+    // a procedure return different answers. It's very unlikely nanosecond
+    // timings
+    // will be the same in two places, even with the same inputs. The VoltDB
+    // client
+    // will get very upset if two copies of a procedure return different
+    // answers,
     // so we dump the stats to Standard Output.
     if (doStats == 1) {
-      StringBuffer b = new StringBuffer(cRSDepTime);
-      b.append(" ");
-      b.append(year);
-      b.append(" ");
-      b.append(month);
-      b.append(" ");
-      b.append(dayOfMonth);
-      b.append(" ");
-      b.append(dayOfWeek);
-      b.append(" ");
-      b.append(uniqueCarrier);
-      b.append(" ");
-      b.append(origin);
-      b.append(" ");
-      b.append(dest);
-      b.append(" Result=");
-      b.append(result);
-      b.append(" Cache Check/Model Create/Model Exec/Update DB Exec time=");
-      b.append(cacheCheckNs);
-      b.append("/");
-      b.append(durationCreateModeNs);
-      b.append("/");
-      b.append(durationModelExecNs);
-      b.append("/");
-      b.append(updateDBNs);
-      System.out.println(b.toString());
+      printToSystemDotOut(origin, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier, dest, cacheCheckNs,
+          durationCreateModeNs, durationModelExecNs, result, updateDBNs);
     }
 
-    
     // Return the array we invented.
     return h2oOut;
+  }
+
+  /**
+   * @param origin
+   * @param cRSDepTime
+   * @param year
+   * @param month
+   * @param dayOfMonth
+   * @param dayOfWeek
+   * @param uniqueCarrier
+   * @param dest
+   * @param cacheCheckNs
+   * @param durationCreateModeNs
+   * @param durationModelExecNs
+   * @param result
+   * @param updateDBNs
+   */
+  private void printToSystemDotOut(String origin, String cRSDepTime, String year, String month, String dayOfMonth,
+      String dayOfWeek, String uniqueCarrier, String dest, long cacheCheckNs, long durationCreateModeNs,
+      long durationModelExecNs, String result, long updateDBNs) {
+    StringBuffer b = new StringBuffer(cRSDepTime);
+    b.append(" ");
+    b.append(year);
+    b.append(" ");
+    b.append(month);
+    b.append(" ");
+    b.append(dayOfMonth);
+    b.append(" ");
+    b.append(dayOfWeek);
+    b.append(" ");
+    b.append(uniqueCarrier);
+    b.append(" ");
+    b.append(origin);
+    b.append(" ");
+    b.append(dest);
+    b.append(" Result=");
+    b.append(result);
+    b.append(" Cache Check/Model Create/Model Exec/Update DB Exec time=");
+    b.append(cacheCheckNs);
+    b.append("/");
+    b.append(durationCreateModeNs);
+    b.append("/");
+    b.append(durationModelExecNs);
+    b.append("/");
+    b.append(updateDBNs);
+    System.out.println(b.toString());
   }
 
   private VoltTable[] createH2Oout(String value) {
@@ -276,4 +303,6 @@ public class IsFlightLate extends VoltProcedure {
     return newH2oOut;
 
   }
+
+ 
 }

@@ -62,7 +62,7 @@ public class H2OMojoWrangler {
       // Some oddness here. When developing on a desktop
       // mojoURL will be 'null' if the zip is missing. If
       // being run from inside a JAR mojoURL will not be null
-      // but will throw an IO exception of the file is bad.
+      // but will throw an IO exception if the file is bad.
       //
       // So the exception block below will catch either an
       // NPE or an IOException...

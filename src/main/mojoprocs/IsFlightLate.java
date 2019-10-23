@@ -124,7 +124,7 @@ public class IsFlightLate extends VoltProcedure {
     voltQueueSQL(seeIfCached, origin, dest, cRSDepTime, year, month, dayOfMonth, dayOfWeek, uniqueCarrier);
     VoltTable[] cacheResults = voltExecuteSQL();
     cacheCheckNs = System.nanoTime() - startNs;
-
+    
     if (cacheResults[0].advanceRow()) {
 
       // We know the answer, so send that back...

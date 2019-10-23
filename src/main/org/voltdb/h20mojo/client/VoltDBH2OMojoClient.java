@@ -65,9 +65,6 @@ public class VoltDBH2OMojoClient {
    * in the same directory our stored procs are...
    */
   final String[] zipFiles = { "gbm_pojo_test.zip"
-      // ,"StackedEnsemble_BestOfFamily_AutoML_20191007_160201.zip"
-      // ,"deeplearning_5004dbaa_17ab_4a57_99c0_a62273b7f1be.zip"
-      // ,"Automotive-ResearchDataSet-VIF-AEGIS.zip"
   };
 
   /**
@@ -154,6 +151,8 @@ public class VoltDBH2OMojoClient {
         }
 
         depTime = depHour + depMin;
+        
+     //   Thread.sleep(1000);
 
         @SuppressWarnings("unused")
         String prediction = mc.getPrediction(origin[r.nextInt(origin.length)], depTime, year, month, day, dayOfWeek,
@@ -169,13 +168,15 @@ public class VoltDBH2OMojoClient {
       mc.disconnect();
 
     } catch (Exception e) {
-      logger.error(e.getMessage());
+      logger.error(e.getClass().getName() + ":" + e.getMessage());
 
     }
 
     msg("Finished");
 
   }
+
+ 
 
   private void checkCache() {
 
@@ -218,7 +219,7 @@ public class VoltDBH2OMojoClient {
     VoltDBSchemaBuilder b = new VoltDBSchemaBuilder(ddlStatements, procStatements, zipFiles, "mojoProcs.jar", client,
         "mojoprocs", testProcName, testParams,otherClasses);
 
-    b.setMaxZipFileSize(50000);
+   // b.setMaxZipFileSize(6000);
     b.loadClassesAndDDLIfNeeded();
 
   }
@@ -563,6 +564,17 @@ public class VoltDBH2OMojoClient {
 
     System.out.println(message);
     logger.info(message);
+  }
+  
+  @Override
+  protected void finalize() throws Throwable {
+
+    if (client != null) {
+      client.drain();
+      client.close();
+      client = null;
+    }
+    super.finalize();
   }
 
  
